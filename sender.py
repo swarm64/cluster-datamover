@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import sys
 import time
+import uuid
 
 import pika
 
@@ -12,15 +14,17 @@ class Sender:
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=args.rmq_host))
         self.channel = self.connection.channel()
 
+        self.db = args.db
         self.exchange = args.exchange
+        self.rpc_exchange = args.rpc_exchange
         self.receivers = args.receivers
         self.chunk_id = args.chunk_id
         self.batch_size = args.batch_size
 
         self.channel.exchange_declare(exchange=self.exchange, exchange_type='direct')
 
-        self.begin_msg = [f'BEGIN-BEGIN-BEGIN {args.table}'] * self.receivers
-        self.end_msg = ['EOF-EOF-EOF'] * self.receivers
+        self.table = args.table
+        self.end_msg = ['EOF'] * self.receivers
 
     def send_to_receivers(self, data):
         for receiver_id in range(self.receivers):
@@ -31,9 +35,42 @@ class Sender:
     def get_receiver_id_from_key(self, key):
         return (int(key) + self.receivers - 1) % self.receivers
 
-    def work(self):
-        self.send_to_receivers(self.begin_msg)
+    def prepare_receivers(self):
+        rpc_channel = self.connection.channel()
+        rpc_channel.exchange_declare(exchange=self.rpc_exchange, exchange_type='fanout')
 
+        rpc_callback_queue = rpc_channel.queue_declare('', exclusive=True).method.queue
+
+        rpc_id = str(uuid.uuid4())
+        request = {
+            'db': self.db,
+            'table': self.table,
+            'exchange': self.exchange,
+            'worker_id': self.chunk_id
+        }
+        rpc_channel.basic_publish(exchange=self.rpc_exchange,
+                                  routing_key='',
+                                  properties=pika.BasicProperties(reply_to=rpc_callback_queue, correlation_id=rpc_id),
+                                  body=json.dumps(request))
+      
+        results = []  
+        for message in rpc_channel.consume(rpc_callback_queue, auto_ack=True):
+            method, properties, body = message
+
+            if properties.correlation_id == rpc_id:
+                results.append(body == b'STARTED')
+
+            if len(results) == self.receivers:
+                break
+
+        return results
+
+    def work(self):
+        results = self.prepare_receivers()
+        if not all(results):
+            print('Not all workers could be started. Aborting.')
+            exit(1)
+        
         lines = [''] * self.receivers
         n = 0
         for line in sys.stdin:
@@ -57,54 +94,13 @@ if __name__ == '__main__':
     args.add_argument('--rmq-host', required=True, help='The host of RabbitMQ')
     args.add_argument('--receivers', type=int, required=True, help='How many nodes are receiving')
     args.add_argument('--exchange', required=True, help='The name of the exchange')
+    args.add_argument('--rpc-exchange', required=True, help='The name of the exchange for RPCs')
     args.add_argument('--chunk-id', required=True, help='Chunk ID for correct routing')
     args.add_argument('--table', required=True, help='The table that is currently sent')
+    args.add_argument('--db', required=True, help='The name of the target DB.')
     args.add_argument('--batch-size', type=int, default=100, help='Size of batches to form')
     args = args.parse_args()
 
     sender = Sender(args)
     sender.work()
     sender.connection.close()
-
-
-# #!/usr/bin/env python3
-# 
-# import argparse
-# import sys
-# 
-# import pika
-# 
-# 
-# def send(args):
-#     connection = pika.BlockingConnection(pika.ConnectionParameters(host=args.rmq_host))
-#     channel = connection.channel()
-# 
-#     channel.exchange_declare(exchange=args.exchange, exchange_type='direct')
-# 
-#     receivers = args.receivers
-#     # base_key = f'{args.chunk_id}.{args.table}'
-#     base_key = f'{args.chunk_id}'
-# 
-#     for receiver_id in range(receivers):
-#         channel.basic_publish(exchange=args.exchange, routing_key=f'{receiver_id}.{base_key}', body=f'BEGIN {args.table}')
-# 
-#     for line in sys.stdin:
-#         key, data = line.split(' ', 1)
-#         receiver_id = (int(key) + receivers - 1) % receivers
-#         channel.basic_publish(exchange=args.exchange, routing_key=f'{receiver_id}.{base_key}', body=data)
-# 
-#     for receiver_id in range(receivers):
-#         channel.basic_publish(exchange=args.exchange, routing_key=f'{receiver_id}.{base_key}', body='EOF')
-# 
-#     connection.close()
-# 
-# if __name__ == '__main__':
-#     args = argparse.ArgumentParser()
-#     args.add_argument('--rmq-host', required=True, help='The host of RabbitMQ')
-#     args.add_argument('--receivers', type=int, required=True, help='How many nodes are receiving')
-# #    args.add_argument('--partitions', type=int, required=True, help='How many partitions each receivers has')
-#     args.add_argument('--exchange', required=True, help='The name of the exchange')
-#     args.add_argument('--chunk-id', required=True, help='Chunk ID for correct routing')
-#     args.add_argument('--table', required=True, help='The table that is currently sent')
-#     args = args.parse_args()
-#     send(args)
