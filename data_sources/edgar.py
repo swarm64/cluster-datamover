@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
 
 import os
+import re
 
 from datetime import datetime
 from glob import glob
@@ -8,10 +8,8 @@ from zipfile import ZipFile
 
 
 class Edgar:
-    def __init__(self, workers, batch_size, directory):
-        self.workers = workers
-        self.batch_size = batch_size
-        self.directory = directory
+    def __init__(self):
+        self.directory = '.'
 
     @staticmethod
     def transform(data):
@@ -21,23 +19,23 @@ class Edgar:
         timestamp = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S %z').timestamp()
 
         return [
-            int(timestamp),                      # timestamp
+            str(int(timestamp)),                 # timestamp
             '{}.{}.{}.0'.format(ip1, ip2, ip3),  # ip
             user,                                # user
-            int(data[4]),                        # cik
+            data[4],                             # cik
             data[5],                             # accession
             data[6],                             # doc
-            int(data[7]),                        # code
-            int(data[8]) if data[8] else 0,      # size
-            int(data[9]) == 1,                   # idx
-            int(data[10]) == 1,                  # norefer
-            int(data[11]) == 1,                  # noagent
-            int(data[12]),                       # find
-            int(data[13]) == 1,                  # crawler
+            data[7],                             # code
+            data[8] if data[8] else "0",         # size
+            data[9],                             # idx
+            data[10],                            # norefer
+            data[11],                            # noagent
+            data[12],                            # find
+            data[13],                            # crawler
             data[14]                             # browser
         ]
 
-    def somename(self):
+    def get_line(self):
         path = os.path.join(self.directory, '*.zip')
         all_files = sorted(glob(path))
 
@@ -52,6 +50,7 @@ class Edgar:
                 with zip_file.open(csv_file_name) as csv_file:
                      header = line_to_list(csv_file.readline())
                      lines = []
+                     n = 0
                      for line in csv_file:
                          if b'"' in line:
                              continue
@@ -61,10 +60,6 @@ class Edgar:
                          line = re.sub(b'\.[0-9],', b',', line)
                          data = line_to_list(line)
                          data = Edgar.transform(data)
-                         lines.append(str(data[0]) + ' ' + '|'.join([str(item) for item in data]) + '\n')
+                         n += 1
 
-                         if len(lines) % args.batch_size == 0:
-                            sender = Sender(args)
-                            sender.work(lines)
-                            sender.connection.close()
-                            lines = []
+                         yield f'{data[0]} {"|".join(data)}\n'

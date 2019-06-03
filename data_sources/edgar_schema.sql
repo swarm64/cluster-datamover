@@ -15,7 +15,7 @@ CREATE TABLE edgar(
     ts BIGINT
   , ip inet
   , "user" CHAR(3)
-  , cik INT
+  , cik VARCHAR(100)
   , accession CHAR(20)
   , doc VARCHAR(255)
   , code SMALLINT

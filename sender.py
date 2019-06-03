@@ -2,11 +2,12 @@
 
 import argparse
 import json
-import sys
 import time
 import uuid
 
 import pika
+
+from data_sources import edgar, stdin
 
 
 class Sender:
@@ -20,10 +21,12 @@ class Sender:
         self.receivers = args.receivers
         self.chunk_id = args.chunk_id
         self.batch_size = args.batch_size
+        self.flush_size = args.flush_size
 
         self.channel.exchange_declare(exchange=self.exchange, exchange_type='direct')
 
         self.table = args.table
+        self.data_source = args.data_source
         self.end_msg = ['EOF'] * self.receivers
 
     def send_to_receivers(self, data):
@@ -63,17 +66,16 @@ class Sender:
             if len(results) == self.receivers:
                 break
 
-        return results
-
-    def work(self):
-        results = self.prepare_receivers()
         if not all(results):
             print('Not all workers could be started. Aborting.')
             exit(1)
-        
+
+    def work(self, data_source):
+        self.prepare_receivers()
         lines = [''] * self.receivers
         n = 0
-        for line in sys.stdin:
+
+        for line in data_source.get_line():
             key, data = line.split(' ', 1)
 
             receiver_id = self.get_receiver_id_from_key(key)
@@ -84,8 +86,13 @@ class Sender:
                 self.send_to_receivers(lines)
                 lines = [''] * self.receivers
 
+            if n % self.flush_size == 0:
+                self.send_to_receivers(self.end_msg)
+                self.prepare_receivers()
+
         # Send remaining buffer
         print('Remainder')
+        self.prepare_receivers()
         self.send_to_receivers(lines)
         self.send_to_receivers(self.end_msg)
 
@@ -99,8 +106,17 @@ if __name__ == '__main__':
     args.add_argument('--table', required=True, help='The table that is currently sent')
     args.add_argument('--db', required=True, help='The name of the target DB.')
     args.add_argument('--batch-size', type=int, default=100, help='Size of batches to form')
+    args.add_argument('--flush-size', type=int, default=10000, help='Send a flush after that many rows')
+    args.add_argument('--data-source', choices=('stdin', 'edgar'), default='stdin', required=True, help=(
+        'From where to take data.'
+    ))
     args = args.parse_args()
 
+    if args.data_source == 'stdin':
+        data_source = stdin.Stdin()
+    elif args.data_source == 'edgar':
+        data_source = edgar.Edgar()
+
     sender = Sender(args)
-    sender.work()
+    sender.work(data_source)
     sender.connection.close()
