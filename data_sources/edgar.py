@@ -8,8 +8,8 @@ from zipfile import ZipFile
 
 
 class Edgar:
-    def __init__(self):
-        self.directory = '.'
+    def __init__(self, logfile):
+        self.logfile = logfile
 
     @staticmethod
     def transform(data):
@@ -36,30 +36,30 @@ class Edgar:
         ]
 
     def get_line(self):
-        path = os.path.join(self.directory, '*.zip')
-        all_files = sorted(glob(path))
+        # path = os.path.join(self.directory, '*.zip')
+        # all_files = sorted(glob(path))
 
         def line_to_list(line):
             return line.decode('utf-8').rstrip().split(',')
 
-        for fpath in all_files:
-            with ZipFile(fpath) as zip_file:
-                content = zip_file.namelist()
-                csv_file_name = [path for path in zip_file.namelist() if 'csv' in path][0]
-                # print('Sending ' + csv_file_name)
-                with zip_file.open(csv_file_name) as csv_file:
-                     header = line_to_list(csv_file.readline())
-                     lines = []
-                     n = 0
-                     for line in csv_file:
-                         if b'"' in line:
-                             continue
-                         elif b'e+' in line:
-                             continue
+        # for fpath in all_files:
+        with ZipFile(self.logfile) as zip_file:
+            content = zip_file.namelist()
+            csv_file_name = [path for path in zip_file.namelist() if 'csv' in path][0]
+            # print('Sending ' + csv_file_name)
+            with zip_file.open(csv_file_name) as csv_file:
+                 header = line_to_list(csv_file.readline())
+                 lines = []
+                 n = 0
+                 for line in csv_file:
+                     if b'"' in line:
+                         continue
+                     elif b'e+' in line:
+                         continue
 
-                         line = re.sub(b'\.[0-9],', b',', line)
-                         data = line_to_list(line)
-                         data = Edgar.transform(data)
-                         n += 1
+                     line = re.sub(b'\.[0-9],', b',', line)
+                     data = line_to_list(line)
+                     data = Edgar.transform(data)
+                     n += 1
 
-                         yield f'{data[0]} {"|".join(data)}\n'
+                     yield f'{data[0]} {"|".join(data)}\n'

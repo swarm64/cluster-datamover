@@ -14,19 +14,23 @@ class Receiver:
         self.args = args
         self.receiver_id = args.receiver_id
         self.rpc_exchange = args.rpc_exchange
-        self.rmq_host = args.rmq_host
+        self.rmq_dsn = args.rmq_dsn
         self.dsn = args.dsn
 
+    def _get_connection(self):
+        parameters = pika.URLParameters(self.rmq_dsn)
+        return pika.BlockingConnection(parameters)
+
     def receive(self, request, event, value):
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.rmq_host))
+        connection = self._get_connection()
         channel = connection.channel()
 
         data_exchange = request['exchange']
         channel.exchange_declare(exchange=data_exchange, exchange_type='direct')
         queue_name = channel.queue_declare('', exclusive=True).method.queue
         
-        worker_id = request['worker_id']
-        channel.queue_bind(exchange=data_exchange, queue=queue_name, routing_key=f'{self.receiver_id}.{worker_id}')
+        comm_id = request['comm_id']
+        channel.queue_bind(exchange=data_exchange, queue=queue_name, routing_key=f'{self.receiver_id}.{comm_id}')
 
         db = request['db']
         table = request['table']
@@ -43,26 +47,26 @@ class Receiver:
 
         if value.value > 0:
             # Early exit
-            print(f'Could not start receiver {worker_id}: {p.stderr.read()}')
+            print(f'Could not start receiver {comm_id}: {p.stderr.read()}')
             return
 
-        print(f'Started receiver {worker_id}.')
+        print(f'Started receiver {comm_id}.')
         for message in channel.consume(queue_name, auto_ack=True):
-             if not message:
-                 continue
+            if not message:
+                continue
 
-             _, _, body = message
+            _, _, body = message
 
-             if body == b'EOF':
-                 p.stdin.write(b'\.\n')
-                 p.stdin.flush()
-                 p.stdin.close()
-                 break
+            if body == b'EOF':
+                p.stdin.write(b'\.\n')
+                p.stdin.flush()
+                p.stdin.close()
+                break
 
-             else:
-                 p.stdin.write(body)
+            else:
+                p.stdin.write(body)
 
-        print(f'Stopped receiver {worker_id}.')
+        print(f'Stopped receiver {comm_id}.')
         channel.close()
 
     def fulfill_request(self, request):
@@ -79,7 +83,7 @@ class Receiver:
         return value.value
 
     def wait(self):
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.rmq_host))
+        connection = self._get_connection()
         channel = connection.channel()
 
         channel.exchange_declare(exchange=self.rpc_exchange, exchange_type='fanout')
@@ -100,7 +104,7 @@ class Receiver:
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
-    args.add_argument('--rmq-host', required=True, help='The host of RabbitMQ')
+    args.add_argument('--rmq-dsn', required=True, help='The DSN of RabbitMQ')
     args.add_argument('--receiver-id', required=True, help='The ID of the receiver')
     args.add_argument('--rpc-exchange', required=True, help='The name of the RPC exchange')
     args.add_argument('--dsn', required=True, help='The DB to connect to')
