@@ -2,10 +2,12 @@
 
 import argparse
 import json
+import struct
 import time
 import uuid
 
 import pika
+import xxhash
 
 from data_sources import edgar, stdin, taxi
 
@@ -41,7 +43,8 @@ class Sender:
                                        body=data[receiver_id])
 
     def get_receiver_id_from_key(self, key):
-        return (int(key) + self.receivers - 1) % self.receivers
+        key = struct.unpack('>q', xxhash.xxh64(int(key).to_bytes(8, byteorder='little')).digest())[0]
+        return (key + self.receivers - 1) % self.receivers
 
     def prepare_receivers(self, table):
         comm_id = str(uuid.uuid4())
